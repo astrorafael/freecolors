@@ -26,6 +26,7 @@
 
               Arduino Nano        AS7262 Spectral Sensor
               ============        ======================
+              EXT0              <----- INT
                     /
                    |  A4 (SDA)  -----> SDA 
               I2C  |  A5 (SCL)  -----> SCL 
@@ -62,6 +63,7 @@
 // FreeRTOS modules
 #include <Arduino_FreeRTOS.h> // This must be the first include file if using FreeRTOS
 #include <semphr.h>
+#include <timers.h>
 
 // Adafruit Spectral Sensor library
 #include <Adafruit_AS726x.h>
@@ -148,7 +150,10 @@ Adafruit_AS726x ams;
 // buffer to hold raw & calibrated values as well as exposure time and gain
 sensor_info_t sensor_info;
 
-SemaphoreHandle_t xBinarySemaphoreKey = NULL;
+SemaphoreHandle_t gxBinarySemaphoreKey = NULL;
+
+TimerHandle_t gxTimer = NULL;
+
 
 /* ************************************************************************** */ 
 /*                      GUI STATE MACHINE DECLARATIONS                        */
@@ -236,7 +241,29 @@ static uint8_t get_next_screen(uint8_t state, uint8_t event)
 
 
 /* ************************************************************************** */ 
-/*                              HELPER FUNCTIONS                              */
+/*                              GUI TASK                                      */
+/* ************************************************************************** */ 
+
+
+void TaskGUI( void * pvParameters )  // This is a Task.
+{
+  (void) pvParameters;  // unusued
+  uint8_t  screen = GUI_GAIN_SCREEN; // The current screen
+
+  for (;;) // A Task shall never return or exit.
+  {
+    menu_action_t   action;
+    uint8_t         event;
+   
+    event  = read_buttons();
+    //Serial.print(F("State: "));  Serial.print(screen); Serial.print(F(" Event: ")); Serial.println(event);
+    action = get_action(screen, event);
+    screen = get_next_screen(screen, event);
+    action();  // execute the action
+  }
+}
+/* ************************************************************************** */ 
+/*                         GUI TASK HELPER FUNCTIONS                          */
 /* ************************************************************************** */ 
 
 // Reads miniTFTWing buttons & joystick and produces events
@@ -279,25 +306,6 @@ static uint8_t read_buttons()
   return event;
 }
 
-/* ************************************************************************** */ 
-
-static int read_sensor()
-{
-  extern Adafruit_AS726x ams;
-  extern sensor_info_t sensor_info;
-  uint8_t freshData = 0;
-
-  if(ams.dataReady()) {
-    freshData = 1;
-    ams.readCalibratedValues(sensor_info.calibratedValues);
-    ams.readRawValues(sensor_info.rawValues);
-    sensor_info.temperature = ams.readTemperature();
-    Serial.print('+');
-  } else {
-    Serial.print('-');
-  }
-  return freshData;
-}
 
 /* ************************************************************************** */ 
 
@@ -368,7 +376,7 @@ static void display_backlight()
   tft.setTextSize(3); // 3x the original font
   tft.setCursor(0, 0);
   tft.setTextColor(ST7735_WHITE, ST7735_BLACK);
-  tft.print("Baklight");
+  tft.print("Backlight");
   // Display the gain value string in TFT
   //tft.setCursor(tft.height()/3, tft.width()/3);
   //tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
@@ -383,7 +391,7 @@ static void display_exposure()
   //extern sensor_info_t sensor_info;
 
   tft.fillScreen(ST7735_BLACK);
-  // Display the "Gain" sttring in TFT
+  // Display the "Exposure" string in TFT
   tft.setTextSize(3);
   tft.setCursor(0,0);
   tft.setTextColor(ST7735_WHITE, ST7735_BLACK);
@@ -517,67 +525,75 @@ static void act_gain_down()
 
 static void act_readings_enter()
 {
-  uint8_t freshData;
-  freshData = read_sensor();
-  if (freshData)
-    display_bars();
-  else
-    display_bars();
-    vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
+  display_bars();
+  vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
 
 /* ************************************************************************** */ 
-/*                              TASKS FUNCTIONS                               */
+/*                                SENSOR TASK                                 */
 /* ************************************************************************** */ 
-
-
-void TaskGUI( void * pvParameters )  // This is a Task.
-{
-  (void) pvParameters;  // unusued
-  uint8_t  screen = GUI_GAIN_SCREEN; // The current screen
-
-  for (;;) // A Task shall never return or exit.
-  {
-    menu_action_t   action;
-    uint8_t         event;
-   
-    event  = read_buttons();
-    //Serial.print(F("State: "));  Serial.print(screen); Serial.print(F(" Event: ")); Serial.println(event);
-    action = get_action(screen, event);
-    screen = get_next_screen(screen, event);
-    action();  // execute the action
-  }
-}
-
-/* ----------------------------------------------------------------------- */
 
 void TaskSensor( void * pvParameters )  // This is a Task.
 {
   (void) pvParameters;  // unusued
   Serial.println(F("Hi there!"));
- ams.enableInterrupt();
  
   for (;;) // A Task shall never return or exit.
   {
-    ams.startMeasurement();
-    xSemaphoreTake(xBinarySemaphoreKey, portMAX_DELAY);
+    ams.startMeasurement(1);
+    xSemaphoreTake(gxBinarySemaphoreKey, portMAX_DELAY);
     read_sensor();
   }
 }
 
-/* ----------------------------------------------------------------------- */
 
-void MyInterruptServiceRoutine(void)
+/* -------------------------------------------------------------------------- */
+/*                     SENSOR TASK HELPER FUNCTIONS                           */
+/* -------------------------------------------------------------------------- */
+
+void EXT0_IRQHandler(void)
 {
   BaseType_t xHigherPriorityTaskWoken;
 
-  // toggles LED
-  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-  xSemaphoreGiveFromISR(xBinarySemaphoreKey, &xHigherPriorityTaskWoken);
+  // toggles Built-in LED
+  //digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  xSemaphoreGiveFromISR(gxBinarySemaphoreKey, &xHigherPriorityTaskWoken);
   if (xHigherPriorityTaskWoken) {
       taskYIELD();
   }
+}
+
+/* -------------------------------------------------------------------------- */
+
+static uint8_t read_sensor()
+{
+  extern Adafruit_AS726x ams;
+  extern sensor_info_t sensor_info;
+  uint8_t freshData = ams.dataReady();
+
+  if(freshData) {
+    ams.readCalibratedValues(sensor_info.calibratedValues);
+    ams.readRawValues(sensor_info.rawValues);
+    sensor_info.temperature = ams.readTemperature();
+    Serial.print('+');
+  } else {
+    Serial.print('-');
+  }
+  return freshData;
+}
+
+/* ************************************************************************** */ 
+/*                                TIMER TASK CALLBACK                         */
+/* ************************************************************************** */ 
+
+
+static void callbackBlinkLED(TimerHandle_t xTimer)
+{
+  // toggles Built-in LED
+   pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  // Serial.println(F("Cucu"));
 }
 
 /* ************************************************************************** */ 
@@ -599,16 +615,14 @@ static void setup_sensor()
   // Note that in MODE 2, the exposure time is actually doubled
   sensor_info.gain     = GAIN_64X;
   sensor_info.exposure = 50;
-  // one shot conversions 
-  ams.setConversionType(ONE_SHOT);
-  ams.enableInterrupt();
   // MCU related configuration
   pinMode(2, INPUT_PULLUP); // Ext INT0
   pinMode(LED_BUILTIN, OUTPUT);
-  attachInterrupt(digitalPinToInterrupt(2), MyInterruptServiceRoutine, FALLING);
+  attachInterrupt(digitalPinToInterrupt(2), EXT0_IRQHandler, FALLING);
   Serial.println(F("AS7262 initialized"));
 }
 
+/* -------------------------------------------------------------------------- */
 
 static void setup_tft()
 {
@@ -634,10 +648,14 @@ static void setup_tft()
   Serial.println(F("TFT initialized"));
 }
 
+/* -------------------------------------------------------------------------- */
+
 static void setup_tasks()
 {
-  //TaskHandle_t xTaskHandle;
-  xBinarySemaphoreKey = xSemaphoreCreateBinary();
+  extern TimerHandle_t     gxTimer;
+  extern SemaphoreHandle_t gxBinarySemaphoreKey;
+
+  gxBinarySemaphoreKey = xSemaphoreCreateBinary();
 
   xTaskCreate(
     TaskGUI,                  // Funtion to execute
@@ -657,7 +675,8 @@ static void setup_tasks()
     NULL                        // pointer to task handle just created
   );
 
-  //vTaskSuspend(xTaskHandle);
+  gxTimer = xTimerCreate("LED", 2000 / portTICK_PERIOD_MS, pdTRUE, 0, callbackBlinkLED);
+  xTimerStart(gxTimer,0);
 }
 
 /* ************************************************************************** */ 
@@ -667,7 +686,7 @@ void setup()
   Serial.begin(9600);
   // wait for serial port to connect. 
   // Needed for native USB, on LEONARDO, MICRO, YUN, and other 32u4 based boards.
-  while (!Serial) { ; }
+  while (!Serial);
   Serial.println(F("Sketch version: " GIT_VERSION));
   setup_tft();
   setup_sensor();
