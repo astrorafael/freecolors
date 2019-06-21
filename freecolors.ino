@@ -136,6 +136,23 @@ typedef void (*menu_action_t)(void);
 /*                          GLOBAL VARIABLES SECTION                          */
 /* ************************************************************************** */ 
 
+// The Adafruit SeeSaw chip that controls the TFT by I2C
+Adafruit_miniTFTWing ss;
+
+// The Adafruit TFT display object based on ST7735
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+
+// buffer to hold raw & calibrated values as well as exposure time and gain
+tft_info_t tft_info;
+
+//create the 6 channel spectral sensor object
+Adafruit_AS726x ams;
+
+// buffer to hold raw & calibrated values as well as exposure time and gain
+sensor_info_t sensor_info;
+
+SemaphoreHandle_t gxBinarySemaphoreKey = NULL;
+
 
 /* ************************************************************************** */ 
 /*                      GUI STATE MACHINE DECLARATIONS                        */
