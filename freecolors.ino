@@ -63,6 +63,15 @@
 // FreeRTOS modules
 #include <Arduino_FreeRTOS.h> // This must be the first include file if using FreeRTOS
 #include <timers.h>
+#include <semphr.h>
+
+// Adafruit Spectral Sensor library
+#include <Adafruit_AS726x.h>
+
+// Adafruit Graphics libraries
+#include <Adafruit_GFX.h>          // Core graphics library
+#include <Adafruit_ST7735.h>       // Hardware-specific library
+#include <Adafruit_miniTFTWing.h>  // Seesaw library for the miniTFT Wing display
 
 // Support for the Git version tags
 #include "git-version.h"
@@ -72,12 +81,55 @@
 /*                                DEFINEs SECTION                             */
 /* ************************************************************************** */ 
 
+// ---------------------------------------------------------
+// Define which Arduino nano pins will control the TFT Reset, 
+// SPI Chip Select (CS) and SPI Data/Command DC
+// ----------------------------------------------------------
 
+#define TFT_RST -1  // miniTFTwing uses the seesaw chip for resetting to save a pin
+#define TFT_CS   5 // Arduino nano D5 pin
+#define TFT_DC   6 // Arduini nano D6 pin
+
+
+// Short delay in screens (milliseconds)
+#define SHORT_DELAY 200
+
+// -----------------------------------------
+// Some predefined colors for the 16 bit TFT
+// -----------------------------------------
+
+#define BLACK   0x0000
+#define GRAY    0x8410
+#define WHITE   0xFFFF
+#define RED     0xF800
+#define ORANGE  0xFA60
+#define YELLOW  0xFFE0  
+#define LIME    0x07FF
+#define GREEN   0x07E0
+#define CYAN    0x07FF
+#define AQUA    0x04FF
+#define BLUE    0x001F
+#define MAGENTA 0xF81F
+#define PINK    0xF8FF
 
 /* ************************************************************************** */ 
 /*                        CUSTOM CLASES & DATA TYPES                          */
 /* ************************************************************************** */ 
 
+typedef struct {
+  float    calibratedValues[AS726x_NUM_CHANNELS];
+  uint16_t rawValues[AS726x_NUM_CHANNELS];
+  uint8_t  gain;           // device gain multiplier
+  uint8_t  exposure;       // device integration time in steps of 2.8 ms
+  uint8_t  temperature;    // device internal temperature
+} sensor_info_t;
+
+typedef struct {
+  uint8_t backlight;    // miniTFTWing backlight value in percentage
+} tft_info_t;
+
+// Menu action function pointer as a typedef
+typedef void (*menu_action_t)(void);
 
 
 /* ************************************************************************** */ 
