@@ -99,6 +99,14 @@ has failed if the value of the parameter passed into configASSERT() equals zero.
 // Short delay in screens (milliseconds)
 #define SHORT_DELAY 200
 
+// Exposure time step in milliseconds
+#define EXPOSURE_UNIT 2.8
+
+// steps in a single button up/down click
+#define EXPOSURE_STEPS 20 
+
+// maximun value expected fro the AS7262 chip
+#define SENSOR_MAX 5000
 // -----------------------------------------
 // Some predefined colors for the 16 bit TFT
 // -----------------------------------------
@@ -156,7 +164,8 @@ Adafruit_AS726x ams;
 // buffer to hold raw & calibrated values as well as exposure time and gain
 sensor_info_t sensor_info;
 
-SemaphoreHandle_t gxBinarySemaphoreKey = NULL;
+SemaphoreHandle_t gxISRSemaphore = NULL;
+SemaphoreHandle_t gxGUISemaphore = NULL;
 
 
 void vAssertCalled(const char* __file, int __lineno) {
@@ -332,8 +341,8 @@ static uint8_t read_buttons()
 
 static void display_bars()
 {
-  //extern sensor_info_t   sensor_info;
-  //extern Adafruit_ST7735 tft;
+  extern sensor_info_t   sensor_info;
+  extern Adafruit_ST7735 tft;
   uint16_t barWidth = (tft.width()) / AS726x_NUM_CHANNELS;
   bool     refresh = false;
 
@@ -352,8 +361,23 @@ static void display_bars()
   // Display bar buffers, used to minimize redrawings
   static uint16_t height[AS726x_NUM_CHANNELS][2];
   static uint8_t  curBuf = 0;                     // current buffer 
-  return;
 
+  // see if we really have to redraw the bars
+  for(int i=0; i<AS726x_NUM_CHANNELS; i++) {
+    height[i][curBuf] = map(sensor_info.calibratedValues[i], 0, SENSOR_MAX, 0, tft.height());
+    if (height[i][curBuf] != height[i][curBuf  ^ 0x01]) {
+      refresh = true;
+    }
+  }
+
+  if (refresh) { 
+    for(int i=0; i<AS726x_NUM_CHANNELS; i++) {
+      uint16_t color  = pgm_read_word(&colors[i]);  
+      tft.fillRect(barWidth * i, 0, barWidth, tft.height() - height[i][curBuf], ST7735_BLACK);
+      tft.fillRect(barWidth * i, tft.height() - height[i][curBuf], barWidth, height[i][curBuf], color);
+    }
+  }
+  curBuf ^= 0x01; // switch to the other buffer
 }
 
 /* ************************************************************************** */ 
@@ -361,7 +385,7 @@ static void display_bars()
 
 static void display_gain()
 {
-  //extern sensor_info_t sensor_info;
+  extern sensor_info_t sensor_info;
 
   // strings to display on TFT
   // It is not worth to place these strings in Flash
@@ -379,9 +403,9 @@ static void display_gain()
   tft.setTextColor(ST7735_WHITE, ST7735_BLACK);
   tft.print("Gain");
   // Display the gain value string in TFT
-  //tft.setCursor(tft.height()/3, tft.width()/3);
-  //tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-  //tft.print(gain_table[sensor_info.gain]);
+  tft.setCursor(tft.height()/3, tft.width()/3);
+  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.print(gain_table[sensor_info.gain]);
   
 }
 
@@ -390,7 +414,7 @@ static void display_gain()
 
 static void display_backlight()
 {
-  //extern tft_info_t tft_info;
+  extern tft_info_t tft_info;
   
   tft.fillScreen(ST7735_BLACK);
   // Display the "Gain" sttring in TFT
@@ -399,9 +423,9 @@ static void display_backlight()
   tft.setTextColor(ST7735_WHITE, ST7735_BLACK);
   tft.print("Backlight");
   // Display the gain value string in TFT
-  //tft.setCursor(tft.height()/3, tft.width()/3);
-  //tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-  //tft.print(tft_info.backlight); tft.print(" %");
+  tft.setCursor(tft.height()/3, tft.width()/3);
+  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.print(tft_info.backlight); tft.print(" %");
   
 }
 
@@ -418,9 +442,9 @@ static void display_exposure()
   tft.setTextColor(ST7735_WHITE, ST7735_BLACK);
   tft.print("Exposure");
   // Display the exposure value string in TFT
-  //tft.setCursor(0, tft.width()/3);
-  //tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
-  //tft.print(sensor_info.exposure*EXPOSURE_UNIT,1); tft.print(" ms");
+  tft.setCursor(0, tft.width()/3);
+  tft.setTextColor(ST7735_YELLOW, ST7735_BLACK);
+  tft.print(sensor_info.exposure*EXPOSURE_UNIT,1); tft.print(" ms");
 }
 
 
@@ -437,7 +461,11 @@ static void act_idle()
 
 static void act_exposure_enter()
 { 
+  extern SemaphoreHandle_t gxGUISemaphore;
+
+  xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
   display_exposure();
+  xSemaphoreGive(gxGUISemaphore);
   vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
@@ -445,13 +473,17 @@ static void act_exposure_enter()
 
 static void act_exposure_up()
 {
-  //extern sensor_info_t sensor_info;
-  //extern Adafruit_AS726x ams;
-  //int exposure = sensor_info.exposure + EXPOSURE_STEPS;
+  extern sensor_info_t sensor_info;
+  extern Adafruit_AS726x ams;
+  extern SemaphoreHandle_t gxGUISemaphore;
+  int exposure;
 
-  //sensor_info.exposure = constrain(exposure, 1, 255);
-  //ams.setIntegrationTime(sensor_info.exposure); 
+  xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
+  exposure = sensor_info.exposure + EXPOSURE_STEPS;
+  sensor_info.exposure = constrain(exposure, 1, 255);
+  ams.setIntegrationTime(sensor_info.exposure); 
   display_exposure();
+  xSemaphoreGive(gxGUISemaphore);
   vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
@@ -459,13 +491,17 @@ static void act_exposure_up()
 
 static void act_exposure_down()
 {
-  //extern sensor_info_t sensor_info;
-  //extern Adafruit_AS726x ams;
-  //int exposure = sensor_info.exposure - EXPOSURE_STEPS;
+  extern sensor_info_t sensor_info;
+  extern Adafruit_AS726x ams;
+  extern SemaphoreHandle_t gxGUISemaphore;
+  int exposure;
 
-  //sensor_info.exposure = constrain(exposure, 1, 255);
-  //ams.setIntegrationTime(sensor_info.exposure); 
+  xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
+  exposure = sensor_info.exposure - EXPOSURE_STEPS;
+  sensor_info.exposure = constrain(exposure, 1, 255);
+  ams.setIntegrationTime(sensor_info.exposure); 
   display_exposure();
+  xSemaphoreGive(gxGUISemaphore);
   vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
@@ -512,7 +548,11 @@ static void act_light_down()
 
 static void act_gain_enter()
 { 
+  extern SemaphoreHandle_t gxGUISemaphore;
+
+  xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
   display_gain();
+  xSemaphoreGive(gxGUISemaphore);
   vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
@@ -520,12 +560,15 @@ static void act_gain_enter()
 
 static void act_gain_up()
 {
-  //extern sensor_info_t sensor_info;
-  //extern Adafruit_AS726x ams;
+  extern sensor_info_t sensor_info;
+  extern Adafruit_AS726x ams;
+  extern SemaphoreHandle_t gxGUISemaphore;
 
-  //sensor_info.gain = (sensor_info.gain + 1) & 0b11;
-  //ams.setGain(sensor_info.gain); 
+  xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
+  sensor_info.gain = (sensor_info.gain + 1) & 0b11;
+  ams.setGain(sensor_info.gain); 
   display_gain();
+  xSemaphoreGive(gxGUISemaphore);
   vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
@@ -533,12 +576,15 @@ static void act_gain_up()
 
 static void act_gain_down()
 {
-  //extern sensor_info_t sensor_info;
-  //extern Adafruit_AS726x ams;
+  extern sensor_info_t sensor_info;
+  extern Adafruit_AS726x ams;
+  extern SemaphoreHandle_t gxGUISemaphore;
 
-  //sensor_info.gain = (sensor_info.gain - 1) & 0b11;
-  //ams.setGain(sensor_info.gain); 
+  xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
+  sensor_info.gain = (sensor_info.gain - 1) & 0b11;
+  ams.setGain(sensor_info.gain); 
   display_gain();
+  xSemaphoreGive(gxGUISemaphore);
   vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
@@ -546,7 +592,11 @@ static void act_gain_down()
 
 static void act_readings_enter()
 {
+  extern SemaphoreHandle_t gxGUISemaphore;
+
+  xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
   display_bars();
+  xSemaphoreGive(gxGUISemaphore);
   vTaskDelay(SHORT_DELAY / portTICK_PERIOD_MS );
 }
 
@@ -566,7 +616,7 @@ void EXT0_IRQHandler(void)
 
   // toggles Built-in LED
   digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-  xSemaphoreGiveFromISR(gxBinarySemaphoreKey, &xHigherPriorityTaskWoken);
+  xSemaphoreGiveFromISR(gxISRSemaphore, &xHigherPriorityTaskWoken);
   if (xHigherPriorityTaskWoken) {
       taskYIELD();
   }
@@ -591,12 +641,15 @@ static void read_sensor()
 void TaskSensor( void * pvParameters )  // This is a Task.
 {
   (void) pvParameters;  // unusued
+  extern SemaphoreHandle_t gxGUISemaphore, gxISRSemaphore;
  
   for (;;) // A Task shall never return or exit.
   {
     ams.startMeasurement();
-    xSemaphoreTake(gxBinarySemaphoreKey, portMAX_DELAY);
+    xSemaphoreTake(gxISRSemaphore, portMAX_DELAY);
+    xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
     read_sensor();
+    xSemaphoreGive(gxGUISemaphore);
   }
 }
 
@@ -669,9 +722,10 @@ static void setup_tft()
 static void setup_tasks()
 {
              TimerHandle_t xTimer;
-  extern SemaphoreHandle_t gxBinarySemaphoreKey;
+  extern SemaphoreHandle_t gxGUISemaphore, gxISRSemaphore;
 
-  gxBinarySemaphoreKey = xSemaphoreCreateBinary();
+  gxISRSemaphore = xSemaphoreCreateBinary();
+  gxGUISemaphore = xSemaphoreCreateBinary();
 
   xTaskCreate(
     TaskGUI,                    // Funtion to execute
@@ -700,6 +754,7 @@ static void setup_tasks()
   );
 
   xTimerStart(xTimer,0);
+  xSemaphoreGive(gxGUISemaphore);
 }
 
 /* -------------------------------------------------------------------------- */
