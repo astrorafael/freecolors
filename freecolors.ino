@@ -297,36 +297,31 @@ static uint8_t read_buttons()
   uint8_t event = GUI_NO_EVENT;
 
   // miniTFT wing buttons;
-  uint32_t sample[2];
   uint32_t buttons;
 
   // read buttons via the I2C SeeSaw chip in miniTFTWing
   // These buttons are active-low logic
-  // implement a software debouncing by samplin at 100 ms apart
-  sample[0] = ~ ss.readButtons();
-  vTaskDelay(100/portTICK_PERIOD_MS);
-  sample[1] = ~ ss.readButtons();
-  buttons = sample[0] & sample[1];
+  buttons = ss.readButtons();
 
-  if ((buttons & TFTWING_BUTTON_A) ) {
+  if ((buttons & TFTWING_BUTTON_A) == 0) {
        //Serial.println("A pressed");
        event = GUI_KEY_A_PRESSED;
-  } else if ((buttons & TFTWING_BUTTON_B) ) {
+  } else if ((buttons & TFTWING_BUTTON_B) == 0) {
        //Serial.println("B pressed");
        event = GUI_KEY_B_PRESSED;
-  } else if ((buttons & TFTWING_BUTTON_UP)) {
+  } else if ((buttons & TFTWING_BUTTON_UP) == 0) {
        //Serial.println("Joy up");
        event = GUI_JOY_UP;
-  } else if ((buttons & TFTWING_BUTTON_DOWN)) {
+  } else if ((buttons & TFTWING_BUTTON_DOWN) == 0) {
        //Serial.println("Joy down");
        event = GUI_JOY_DOWN;
-  } else if ((buttons & TFTWING_BUTTON_LEFT)  ) {
+  } else if ((buttons & TFTWING_BUTTON_LEFT) == 0 ) {
        //Serial.println("Joy left");
        event = GUI_JOY_LEFT;
-  } else if ((buttons & TFTWING_BUTTON_RIGHT) ) {
+  } else if ((buttons & TFTWING_BUTTON_RIGHT) == 0 ) {
        //Serial.println("Joy right");
        event = GUI_JOY_RIGHT;
-  } else if ((buttons & TFTWING_BUTTON_SELECT)  ) {
+  } else if ((buttons & TFTWING_BUTTON_SELECT) == 0 ) {
        //Serial.println("Joy select");
        event = GUI_JOY_PRESSED;
   }
@@ -645,11 +640,11 @@ void TaskSensor( void * pvParameters )  // This is a Task.
  
   for (;;) // A Task shall never return or exit.
   {
+    xSemaphoreGive(gxGUISemaphore);
     ams.startMeasurement();
     xSemaphoreTake(gxISRSemaphore, portMAX_DELAY);
     xSemaphoreTake(gxGUISemaphore, portMAX_DELAY);
     read_sensor();
-    xSemaphoreGive(gxGUISemaphore);
   }
 }
 
@@ -658,12 +653,13 @@ void TaskSensor( void * pvParameters )  // This is a Task.
 /*                                TIMER TASK CALLBACK                         */
 /* ************************************************************************** */ 
 
-
+/*
 static void callbackBlinkLED(TimerHandle_t xTimer)
 {
   (void) xTimer;
   digitalWrite(LED_BUILTIN, ~ digitalRead(LED_BUILTIN));
 }
+*/
 
 /* ************************************************************************** */ 
 /*                              SETUP FUNCTIONS                               */
@@ -721,7 +717,7 @@ static void setup_tft()
 
 static void setup_tasks()
 {
-             TimerHandle_t xTimer;
+             // TimerHandle_t xTimer;
   extern SemaphoreHandle_t gxGUISemaphore, gxISRSemaphore;
 
   gxISRSemaphore = xSemaphoreCreateBinary();
@@ -745,16 +741,15 @@ static void setup_tasks()
     NULL                        // pointer to task handle just created
   );
 
-  xTimer = xTimerCreate(
+ /* xTimer = xTimerCreate(
     "LED",                     // A name just for humans
     2000 / portTICK_PERIOD_MS, // timeout period
     pdTRUE,                    // autoreload flag
     0,                         //
     callbackBlinkLED          // function to execute
-  );
+  );*/
 
-  xTimerStart(xTimer,0);
-  xSemaphoreGive(gxGUISemaphore);
+  // xTimerStart(xTimer,0);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -765,7 +760,7 @@ void setup()
   // wait for serial port to connect. 
   // Needed for native USB, on LEONARDO, MICRO, YUN, and other 32u4 based boards.
   while (!Serial);
-  Serial.println(F("Sketch version: " ));
+  Serial.println(F("Sketch version: " GIT_VERSION));
   setup_tft();
   setup_sensor();
   setup_tasks();

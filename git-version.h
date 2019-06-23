@@ -24,7 +24,7 @@ Locate the file named platform.txt in the Arduino installation directory
 In the same directory, create a file named platform.local.txt with the following content:
 
 ```
-	hooks.sketch.prebuild.1.pattern=make-git-version "{build.source.path}" "{build.path}"
+	recipe.hooks.sketch.prebuild.1.pattern=make-git-version "{build.source.path}" "{build.path}"
 ```
 
 In your sketch, include "git-version.h" and use it like so:
